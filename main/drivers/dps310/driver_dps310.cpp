@@ -35,8 +35,9 @@ esp_err_t DriverDPS310::init()
     if (prodRevId.prodID != PRODUCT_ID_VAL || prodRevId.revID != REV_ID_VAL) {
         return ESP_FAIL;
     }
-    
-    this->readCoeff();
+
+    ESP_RETURN_ON_ERROR(this->waitCoeffAndRdy(), DPS310_ERROR_TAG, DPS310_CFG_ERR_MSG);
+    ESP_RETURN_ON_ERROR(this->readCoeff(), DPS310_ERROR_TAG, DPS310_CFG_ERR_MSG);
     
     ESP_RETURN_ON_ERROR(i2c_write_byte(this->i2cMasterPort, DPS310_SLAVE_ADDR, PRS_CFG_REG, this->pmRate | this->poRate), DPS310_ERROR_TAG, DPS310_CFG_ERR_MSG);
     ESP_RETURN_ON_ERROR(i2c_write_byte(this->i2cMasterPort, DPS310_SLAVE_ADDR, TMP_CFG_REG, this->internalExternalSensor | this->tmpmRate | this->tmpoRate), DPS310_ERROR_TAG, DPS310_CFG_ERR_MSG);
@@ -53,23 +54,6 @@ esp_err_t DriverDPS310::init()
 
     ESP_RETURN_ON_ERROR(i2c_write_byte(this->i2cMasterPort, DPS310_SLAVE_ADDR, CFG_REG, configRegister), DPS310_ERROR_TAG, DPS310_CFG_ERR_MSG);
     ESP_RETURN_ON_ERROR(i2c_write_byte(this->i2cMasterPort, DPS310_SLAVE_ADDR, MEAS_CFG_REG, measurementConfig), DPS310_ERROR_TAG, DPS310_CFG_ERR_MSG);
-
-    uint8_t rdyVal = 0;
-
-    if (measurementConfig == MeasurementConfig::P_MEAS || measurementConfig == MeasurementConfig::CONT_P_MEAS) {
-        rdyVal = PRS_RDY_MASK;
-    } else if (measurementConfig == MeasurementConfig::TMP_MEAS || measurementConfig == MeasurementConfig::CONT_TMP_MEAS) {
-        rdyVal = TMP_RDY_MASK;
-    } else if (measurementConfig == MeasurementConfig::CONT_P_TMP_MEAS) {
-        rdyVal = TMP_PRS_RDY_MASK;
-    }
-
-    uint8_t ready = 0;
-
-    do {
-        ready = i2c_read_byte(this->i2cMasterPort, DPS310_SLAVE_ADDR, MEAS_CFG_REG) >> 4;
-        vTaskDelay(10/portTICK_PERIOD_MS);
-    } while ((ready & rdyVal) == 0);
 
     return ESP_OK;
 }
@@ -104,6 +88,7 @@ esp_err_t DriverDPS310::readTmp(DriverDPS310::TmpMeasure *tmpMeasure)
         return ESP_FAIL;
     }
 
+    ESP_RETURN_ON_ERROR(this->waitTmp(), DPS310_ERROR_TAG, DPS310_TMP_WAIT_TIMEOUT);
     uint8_t tmpB2 = i2c_read_byte(this->i2cMasterPort, DPS310_SLAVE_ADDR, TMP_B2_REG);
     uint8_t tmpB1 = i2c_read_byte(this->i2cMasterPort, DPS310_SLAVE_ADDR, TMP_B1_REG);
     uint8_t tmpB0 = i2c_read_byte(this->i2cMasterPort, DPS310_SLAVE_ADDR, TMP_B0_REG);
@@ -124,7 +109,8 @@ esp_err_t DriverDPS310::readPress(double tmpRawScal, PressMeasure *pressMeasure)
         && this->measurementConfig != MeasurementConfig::CONT_P_TMP_MEAS) {
         return ESP_FAIL;
     }
-
+    
+    ESP_RETURN_ON_ERROR(this->waitPress(), DPS310_ERROR_TAG, DPS310_PRESS_WAIT_TIMEOUT);
     uint8_t psrB2 = i2c_read_byte(this->i2cMasterPort, DPS310_SLAVE_ADDR, PSR_B2_REG);
     uint8_t psrB1 = i2c_read_byte(this->i2cMasterPort, DPS310_SLAVE_ADDR, PSR_B1_REG);
     uint8_t psrB0 = i2c_read_byte(this->i2cMasterPort, DPS310_SLAVE_ADDR, PSR_B0_REG);
@@ -149,8 +135,8 @@ esp_err_t DriverDPS310::execMeasurement(DriverDPS310::Measure *measure)
 
     TmpMeasure tmpMeasure;
     PressMeasure pressMeasure;
-    this->readTmp(&tmpMeasure);
-    this->readPress(tmpMeasure.tmpRawScal, &pressMeasure);
+    ESP_RETURN_ON_ERROR(this->readTmp(&tmpMeasure), DPS310_ERROR_TAG, DPS310_MEASUREMENT_ERR);
+    ESP_RETURN_ON_ERROR(this->readPress(tmpMeasure.tmpRawScal, &pressMeasure), DPS310_ERROR_TAG, DPS310_MEASUREMENT_ERR);
 
     *measure = {
         .tmpMeasure = tmpMeasure,
@@ -158,6 +144,54 @@ esp_err_t DriverDPS310::execMeasurement(DriverDPS310::Measure *measure)
     };
 
     return ESP_OK;
+}
+
+esp_err_t DriverDPS310::waitCoeffAndRdy()
+{
+    uint8_t coeffRdy = 0;
+
+    for (int i = 0;i < N_RTRY_DATA_RDY;i++) {
+        coeffRdy = i2c_read_byte(this->i2cMasterPort, DPS310_SLAVE_ADDR, MEAS_CFG_REG) >> 6;
+        if (coeffRdy == COEFF_RDY_VAL) { //bit dei coefficienti e rdy alti
+            return ESP_OK;
+        } else {
+            vTaskDelay(10/portTICK_PERIOD_MS);
+        }
+    }
+
+    return ESP_FAIL;
+}
+
+esp_err_t DriverDPS310::waitTmp()
+{
+    uint8_t tmpRdy = 0;
+    
+    for (int i = 0;i < N_RTRY_DATA_RDY;i++) {
+        tmpRdy = i2c_read_byte(this->i2cMasterPort, DPS310_SLAVE_ADDR, MEAS_CFG_REG) >> 4;
+        if ((tmpRdy & TMP_RDY_MASK) > 0) { //bit dei coefficienti e rdy alti
+            return ESP_OK;
+        } else {
+            vTaskDelay(10/portTICK_PERIOD_MS);
+        }
+    }
+
+    return ESP_FAIL;
+}
+
+esp_err_t DriverDPS310::waitPress()
+{
+    uint8_t pressRdy = 0;
+    
+    for (int i = 0;i < N_RTRY_DATA_RDY;i++) {
+        pressRdy = i2c_read_byte(this->i2cMasterPort, DPS310_SLAVE_ADDR, MEAS_CFG_REG) >> 4;
+        if ((pressRdy & PRS_RDY_MASK) > 0) { //bit dei coefficienti e rdy alti
+            return ESP_OK;
+        } else {
+            vTaskDelay(10/portTICK_PERIOD_MS);
+        }
+    }
+
+    return ESP_FAIL;
 }
 
 esp_err_t DriverDPS310::softReset()

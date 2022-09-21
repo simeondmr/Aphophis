@@ -99,14 +99,20 @@
 #define C30_BIT_LEN                 0x10
 
 /* Status masks*/
-#define TMP_RDY_MASK                0x0e
+#define TMP_RDY_MASK                0x02
 #define PRS_RDY_MASK                0x0d
-#define TMP_PRS_RDY_MASK            0x0f
+#define COEFF_RDY_VAL               0x03
+
+#define N_RTRY_DATA_RDY             0x64
 
 /*Error TAG and MSGs*/
 #define DPS310_ERROR_TAG            "Error"
 #define DPS310_RESET_ERR_MSG        "Reset error"
 #define DPS310_CFG_ERR_MSG          "Configuration error"
+#define DPS310_TMP_WAIT_TIMEOUT     "Temperature waiting timeout"
+#define DPS310_PRESS_WAIT_TIMEOUT   "Pressure waiting timeout"
+#define DPS310_MEASUREMENT_ERR      "Measurement error"
+
 
 /* Soft reset value, for RESET register */
 #define SOFT_RESET_REGISTER_VAL     0x09
@@ -255,7 +261,7 @@ public:
     esp_err_t execMeasurement(Measure *measure);
 
     /**
-     * readPress() - perform a DPS310 soft reset
+     * softReset() - perform a DPS310 soft reset
      * @arg1: where to save the readed pressure
      * Return:
      * - ESP_OK - if soft reset is ok
@@ -285,7 +291,41 @@ private:
         SCALE_FACTOR_RATE128
     };
 
+    /**
+     * readCoeff() - read DPS310's coefficients from registers
+     * 
+     * Return:
+     * - ESP_OK - if a correct reading was done
+     * - ESP_FAIL - in case of error
+     **/
     esp_err_t readCoeff();
+
+    /**
+     * waitCoeffAndRdy() - wait until DPS310's coefficient are ready to be read
+     * 
+     * Return:
+     * - ESP_OK - if a correct reading was done
+     * - ESP_FAIL - in case of error
+     **/
+    esp_err_t waitCoeffAndRdy();
+
+    /**
+     * waitTmp() - wait until temperature is ready to be read
+     * 
+     * Return:
+     * - ESP_OK - if a correct reading was done
+     * - ESP_FAIL - in case of error
+     **/
+    esp_err_t waitTmp();
+
+    /**
+     * waitPress() - wait until pressure is ready to be read
+     * 
+     * Return:
+     * - ESP_OK - if a correct reading was done
+     * - ESP_FAIL - in case of error
+     **/
+    esp_err_t waitPress();
 
     int32_t getTwosComplement(int32_t value, uint8_t length) {
         if (value & ((uint32_t)1 << (length - 1))) {
